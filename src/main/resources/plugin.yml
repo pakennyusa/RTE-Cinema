@@ -1,0 +1,25 @@
+name: RTECinema
+version: '0.1.0-beta'
+main: studios.rte.cinema.RTECinema
+api-version: '26.3'
+author: RTE Studios
+description: Low-bandwidth vanilla Minecraft cinema screens
+softdepend: [LuckPerms]
+commands:
+  cinema:
+    description: Manage cinema screens
+    aliases: [movie]
+    usage: /cinema help
+permissions:
+  rtecinema.use:
+    default: true
+  rtecinema.watch:
+    default: true
+  rtecinema.control:
+    default: op
+  rtecinema.create:
+    default: op
+  rtecinema.delete:
+    default: op
+  rtecinema.admin:
+    default: op
