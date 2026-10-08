@@ -1,0 +1,5 @@
+ffmpeg-path: ffmpeg
+fps: 8
+max-screen-width: 4
+max-screen-height: 3
+view-distance: 32
