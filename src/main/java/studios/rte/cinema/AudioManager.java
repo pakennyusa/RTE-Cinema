@@ -86,8 +86,8 @@ final class AudioManager {
     }
     private synchronized void generatePack()throws IOException {
         Path temporary=pack.resolveSibling(pack.getFileName()+".tmp");
-        int format=plugin.getConfig().getInt("audio.pack-format",75);
-        String mcmeta="{\"pack\":{\"pack_format\":"+format+",\"description\":\"RTE Cinema Audio\"}}";
+        int format=plugin.getConfig().getInt("audio.pack-format",97);
+        String mcmeta="{\"pack\":{\"pack_format\":"+format+",\"min_format\":["+format+",0],\"max_format\":"+format+",\"description\":\"RTE Cinema Audio\"}}";
         StringBuilder sounds=new StringBuilder("{");
         boolean first=true;
         try(ZipOutputStream zip=new ZipOutputStream(Files.newOutputStream(temporary))){
