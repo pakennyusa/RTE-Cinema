@@ -8,3 +8,6 @@ audio:
   pack-url: '' # Public HTTPS URL of RTE-Cinema-Audio.zip
   pack-format: 97 # Minecraft 26.3
   volume: 1.0
+  # Positive delays audio; negative starts it earlier (milliseconds)
+  offset-ms: 0
+  debug: false
