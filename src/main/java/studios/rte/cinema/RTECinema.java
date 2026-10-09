@@ -112,7 +112,8 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
             // Each segment is dispatched only once and after the matching frame packet batch.
             // Offset is adjustable because the vanilla client does not acknowledge sound/video presentation.
             int segment=(int)Math.floor(Math.max(0,screen.seconds+audioOffset)/audio.segmentSeconds());
-            boolean audioCue=audio.ready(screen.filename)&&segment!=screen.lastAudioSegment;
+            boolean single=getConfig().getString("audio.mode","single").equalsIgnoreCase("single");
+            boolean audioCue=single ? audio.fullReady(screen.filename)&&screen.lastAudioSegment<0 : audio.ready(screen.filename)&&segment!=screen.lastAudioSegment;
             for(Player viewer:Bukkit.getOnlinePlayers()){
                 if(!viewer.hasPermission("rtecinema.watch")||viewer.getWorld()!=first.getWorld())continue;
                 if(viewer.getLocation().distanceSquared(first.getLocation())>distSq)continue;
@@ -123,12 +124,13 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
                     }
                 }
                 if(newFrame&&audioCue&&audioReady.contains(viewer.getUniqueId())){
-                    audio.play(viewer,screen,segment,first.getLocation());
+                    if(single)audio.playSingle(viewer,screen,first.getLocation());
+                    else audio.play(viewer,screen,segment,first.getLocation());
                     if(getConfig().getBoolean("audio.debug",false))
                         getLogger().info("Audio dispatch ["+screen.name+"]: segment "+segment+" at "+String.format(Locale.ROOT,"%.2f",screen.seconds)+"s to "+viewer.getName());
                 }
             }
-            if(newFrame&&audioCue)screen.lastAudioSegment=segment;
+            if(newFrame&&audioCue)screen.lastAudioSegment=single?0:segment;
             if(newFrame)screen.lastSentGeneration=screen.generation;
         }
     }
@@ -195,9 +197,10 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
                             p.sendMessage(ChatColor.YELLOW+"Preparing OGG audio asynchronously. This may take a while.");
                             executor.submit(()->{
                                 try{
-                                    int parts=audio.prepare(movie,ffmpeg);
+                                    boolean singleMode=getConfig().getString("audio.mode","single").equalsIgnoreCase("single");
+                                    int parts=singleMode?audio.prepareSingle(movie,ffmpeg):audio.prepare(movie,ffmpeg);
                                     Bukkit.getScheduler().runTask(this,()->{
-                                        p.sendMessage(ChatColor.GREEN+"Audio ready: "+parts+" OGG segments. Re-upload RTE-Cinema-Audio.zip to your HTTPS host, then use /cinema audio pack.");
+                                        p.sendMessage(ChatColor.GREEN+(singleMode?"Single OGG soundtrack ready ("+parts+" bytes).":"Audio ready: "+parts+" OGG segments.")+" Re-upload RTE-Cinema-Audio.zip to your HTTPS host, then use /cinema audio pack.");
                                     });
                                 }catch(Exception ex){
                                     getLogger().warning("Audio preparation failed for "+filename+": "+ex.getMessage());
@@ -215,7 +218,7 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
                         case "test"->{
                             if(!allowed(p,"rtecinema.use"))return true;
                             Screen current=resolve(p);
-                            if(current==null||current.filename==null||!audio.ready(current.filename)){
+                            if(current==null||current.filename==null||!(audio.ready(current.filename)||audio.fullReady(current.filename))){
                                 p.sendMessage(ChatColor.RED+"Select a screen playing a film with prepared audio first.");return true;
                             }
                             if(!audioReady.contains(p.getUniqueId())){
@@ -225,6 +228,11 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
                             if(args.length>=3){
                                 try{index=Integer.parseInt(args[2]);}
                                 catch(NumberFormatException ex){p.sendMessage(ChatColor.RED+"Usage: /cinema audio test [segment number]");return true;}
+                            }
+                            if(getConfig().getString("audio.mode","single").equalsIgnoreCase("single")){
+                                p.sendMessage(ChatColor.GOLD+"Testing full-length OGG soundtrack.");
+                                audio.playSingle(p,current,p.getLocation());
+                                return true;
                             }
                             int count=audio.count(current.filename);
                             if(index<0||index>=count){p.sendMessage(ChatColor.RED+"Segment must be 0 through "+(count-1));return true;}
@@ -236,7 +244,7 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
                             if(!allowed(p,"rtecinema.use"))return true;
                             Screen current=resolve(p);
                             p.sendMessage("Audio pack loaded: "+audioReady.contains(p.getUniqueId())+
-                                "; selected film prepared: "+(current!=null&&current.filename!=null&&audio.ready(current.filename))+
+                                "; selected film prepared: "+(current!=null&&current.filename!=null&&(getConfig().getString("audio.mode","single").equalsIgnoreCase("single")?audio.fullReady(current.filename):audio.ready(current.filename)))+
                                 "; segments: "+(current==null||current.filename==null?0:audio.count(current.filename))+
                                 "; timeline: "+(current==null?0:(int)current.seconds)+"s");
                         }
