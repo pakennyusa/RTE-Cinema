@@ -3,3 +3,8 @@ fps: 8
 max-screen-width: 4
 max-screen-height: 3
 view-distance: 32
+
+audio:
+  pack-url: '' # Public HTTPS URL of RTE-Cinema-Audio.zip
+  pack-format: 97 # Minecraft 26.3
+  volume: 1.0
