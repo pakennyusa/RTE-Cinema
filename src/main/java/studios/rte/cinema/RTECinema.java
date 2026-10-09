@@ -91,45 +91,45 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
     private void broadcast(){
         int maxDistance=Math.max(8,Math.min(128,getConfig().getInt("view-distance",32)));
         double distSq=maxDistance*maxDistance;
-        for(Screen s:screens.values()){
-            if(s.decoder==null||s.paused)continue;
-            if(s.decoder.finished){
-                if(s.loop && s.filename!=null){
-                    try{start(s,s.filename,0);}catch(IOException e){getLogger().warning("Loop failed: "+e.getMessage());stop(s);}
-                }else{
-                    silence(s);s.decoder=null;s.filename=null;s.lastAudioSegment=-1;
-                }
+        double audioOffset=getConfig().getDouble("audio.offset-ms",0.0)/1000.0;
+        for(Screen screen:screens.values()){
+            if(screen.decoder==null||screen.paused)continue;
+            if(screen.decoder.finished){
+                if(screen.loop&&screen.filename!=null){
+                    try{start(screen,screen.filename,0);}
+                    catch(IOException e){getLogger().warning("Loop failed: "+e.getMessage());stop(screen);}
+                }else{silence(screen);screen.decoder=null;screen.filename=null;screen.lastAudioSegment=-1;}
                 continue;
             }
-            boolean newFrame=s.generation!=s.lastSentGeneration;
-            // Start the clock when the first decoded frame is available, not when the command ran.
-            if(s.playStartNanos==0L && newFrame){
-                s.playStartNanos=System.nanoTime();
-                s.lastSentGeneration=s.generation;
+            boolean newFrame=screen.generation!=screen.lastSentGeneration;
+            if(screen.playStartNanos==0L){
+                if(!newFrame)continue;
+                screen.playStartNanos=System.nanoTime();
             }
-            if(s.playStartNanos==0L)continue;
-            s.seconds=s.startOffsetSeconds+(System.nanoTime()-s.playStartNanos)/1_000_000_000.0;
-            ItemFrame first=s.itemFrame(0);
+            screen.seconds=screen.startOffsetSeconds+(System.nanoTime()-screen.playStartNanos)/1_000_000_000.0;
+            ItemFrame first=screen.itemFrame(0);
             if(first==null)continue;
-            int segment=(int)Math.floor(s.seconds/audio.segmentSeconds());
-            boolean playAudio=audio.ready(s.filename) && segment!=s.lastAudioSegment;
-            if(playAudio){
-                s.lastAudioSegment=segment;
-                if(getConfig().getBoolean("audio.debug",false))getLogger().info("Audio scheduler ["+s.name+"]: segment="+segment+", seconds="+String.format(java.util.Locale.ROOT,"%.2f",s.seconds)+", available="+audio.count(s.filename));
-            }
-            for(Player p:Bukkit.getOnlinePlayers()){
-                if(!p.hasPermission("rtecinema.watch")||p.getWorld()!=first.getWorld())continue;
-                if(p.getLocation().distanceSquared(first.getLocation())>distSq)continue;
-                if(playAudio && audioReady.contains(p.getUniqueId())){
-                    audio.play(p,s,segment,first.getLocation());
-                    if(getConfig().getBoolean("audio.debug",false))getLogger().info("Audio dispatch ["+s.name+"]: segment "+segment+" -> "+p.getName());
+            // Each segment is dispatched only once and after the matching frame packet batch.
+            // Offset is adjustable because the vanilla client does not acknowledge sound/video presentation.
+            int segment=(int)Math.floor(Math.max(0,screen.seconds+audioOffset)/audio.segmentSeconds());
+            boolean audioCue=audio.ready(screen.filename)&&segment!=screen.lastAudioSegment;
+            for(Player viewer:Bukkit.getOnlinePlayers()){
+                if(!viewer.hasPermission("rtecinema.watch")||viewer.getWorld()!=first.getWorld())continue;
+                if(viewer.getLocation().distanceSquared(first.getLocation())>distSq)continue;
+                if(newFrame){
+                    for(int i=0;i<screen.maps.size();i++){
+                        MapView map=screen.map(i);
+                        if(map!=null)viewer.sendMap(map);
+                    }
                 }
-                if(newFrame)for(int i=0;i<s.maps.size();i++){
-                    MapView map=s.map(i);
-                    if(map!=null)p.sendMap(map);
+                if(audioCue&&audioReady.contains(viewer.getUniqueId())){
+                    audio.play(viewer,screen,segment,first.getLocation());
+                    if(getConfig().getBoolean("audio.debug",false))
+                        getLogger().info("Audio dispatch ["+screen.name+"]: segment "+segment+" at "+String.format(Locale.ROOT,"%.2f",screen.seconds)+"s to "+viewer.getName());
                 }
             }
-            if(newFrame)s.lastSentGeneration=s.generation;
+            if(audioCue)screen.lastAudioSegment=segment;
+            if(newFrame)screen.lastSentGeneration=screen.generation;
         }
     }
     private boolean allowed(CommandSender sender,String permission){
