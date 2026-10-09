@@ -29,6 +29,7 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
     private File screenFile;
     private AudioManager audio;
     private final Set<UUID> audioReady=ConcurrentHashMap.newKeySet();
+    private final Set<UUID> audioOffered=ConcurrentHashMap.newKeySet();
     @Override public void onEnable(){
         saveDefaultConfig();
         mediaRoot=getDataFolder().toPath().resolve("media");
@@ -135,7 +136,7 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
         s.sendMessage("/cinema create <name> <width> <height> - look at bottom-left wall block");
         s.sendMessage("/cinema list | select <name> | gui | status");
         s.sendMessage("/cinema play <filename> | pause | resume | stop | delete <name>");
-        s.sendMessage("/cinema audio prepare <filename> | audio pack | audio status");
+        s.sendMessage("/cinema audio prepare <filename> | audio pack | audio status | audio test");
         s.sendMessage("/cinema loop on|off | loop toggle | loop status (per theater)");
         s.sendMessage("Media folder: plugins/RTECinema/media");
     }
@@ -200,8 +201,23 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
                         }
                         case "pack"->{
                             if(!allowed(p,"rtecinema.watch"))return true;
+                            audioReady.remove(p.getUniqueId());
+                            audioOffered.add(p.getUniqueId());
                             audio.sendPack(p);
                             p.sendMessage("Resource pack offered. Accept it for movie audio.");
+                        }
+                        case "test"->{
+                            if(!allowed(p,"rtecinema.use"))return true;
+                            Screen current=resolve(p);
+                            if(current==null||current.filename==null||!audio.ready(current.filename)){
+                                p.sendMessage(ChatColor.RED+"Select a screen playing a film with prepared audio first.");return true;
+                            }
+                            if(!audioReady.contains(p.getUniqueId())){
+                                p.sendMessage(ChatColor.RED+"Cinema pack not confirmed loaded. Run /cinema audio pack.");return true;
+                            }
+                            p.sendMessage(ChatColor.GOLD+"Testing segment 0; raise Jukebox/Note Blocks volume.");
+                            audio.play(p,current,0,p.getLocation());
+                            getLogger().info("Audio diagnostic: sent segment 0 to "+p.getName()+" for "+current.filename);
                         }
                         case "status"->{
                             if(!allowed(p,"rtecinema.use"))return true;
@@ -345,19 +361,22 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
     }
     @EventHandler public void onPackStatus(org.bukkit.event.player.PlayerResourcePackStatusEvent event){
         switch(event.getStatus()){
-            case SUCCESSFULLY_LOADED -> audioReady.add(event.getPlayer().getUniqueId());
+            case SUCCESSFULLY_LOADED -> {
+                if(audioOffered.contains(event.getPlayer().getUniqueId()))audioReady.add(event.getPlayer().getUniqueId());
+            }
             case DECLINED, FAILED_DOWNLOAD, INVALID_URL, FAILED_RELOAD, DISCARDED -> audioReady.remove(event.getPlayer().getUniqueId());
             default -> {}
         }
     }
     @EventHandler public void onQuit(org.bukkit.event.player.PlayerQuitEvent event){
         audioReady.remove(event.getPlayer().getUniqueId());
+        audioOffered.remove(event.getPlayer().getUniqueId());
         selected.remove(event.getPlayer().getUniqueId());
     }
     @Override public List<String> onTabComplete(CommandSender sender,Command command,String alias,String[] args){
         if(args.length==1)return List.of("help","create","list","select","gui","status","play","pause","resume","stop","delete","loop","audio").stream().filter(s->s.startsWith(args[0].toLowerCase(Locale.ROOT))).toList();
         if(args.length==2&&args[0].equalsIgnoreCase("loop"))return List.of("on","off","toggle","status");
-        if(args.length==2&&args[0].equalsIgnoreCase("audio"))return List.of("prepare","pack","status");
+        if(args.length==2&&args[0].equalsIgnoreCase("audio"))return List.of("prepare","pack","status","test");
         if(args.length==2&&(args[0].equalsIgnoreCase("select")||args[0].equalsIgnoreCase("delete")))return screens.keySet().stream().filter(s->s.startsWith(args[1].toLowerCase(Locale.ROOT))).toList();
         if(args.length==2&&args[0].equalsIgnoreCase("play")){
             try(var paths=Files.list(mediaRoot)){return paths.filter(Files::isRegularFile).map(p->p.getFileName().toString()).filter(s->s.startsWith(args[1])).limit(30).toList();}
