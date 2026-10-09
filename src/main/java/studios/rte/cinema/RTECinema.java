@@ -122,13 +122,13 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
                         if(map!=null)viewer.sendMap(map);
                     }
                 }
-                if(audioCue&&audioReady.contains(viewer.getUniqueId())){
+                if(newFrame&&audioCue&&audioReady.contains(viewer.getUniqueId())){
                     audio.play(viewer,screen,segment,first.getLocation());
                     if(getConfig().getBoolean("audio.debug",false))
                         getLogger().info("Audio dispatch ["+screen.name+"]: segment "+segment+" at "+String.format(Locale.ROOT,"%.2f",screen.seconds)+"s to "+viewer.getName());
                 }
             }
-            if(audioCue)screen.lastAudioSegment=segment;
+            if(newFrame&&audioCue)screen.lastAudioSegment=segment;
             if(newFrame)screen.lastSentGeneration=screen.generation;
         }
     }
