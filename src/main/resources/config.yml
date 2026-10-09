@@ -5,6 +5,8 @@ max-screen-height: 3
 view-distance: 32
 
 audio:
+  # single: one continuous OGG per video; segments: legacy four-second audio
+  mode: single
   pack-url: '' # Public HTTPS URL of RTE-Cinema-Audio.zip
   pack-format: 97 # Minecraft 26.3
   volume: 1.0
