@@ -177,8 +177,9 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
         return true;
     }
     private void create(Player p,String name,int w,int h){
-        Block target=p.getTargetBlockExact(8);
-        BlockFace face=p.getTargetBlockFace(8);
+        org.bukkit.util.RayTraceResult hit=p.rayTraceBlocks(8);
+        Block target=hit==null?null:hit.getHitBlock();
+        BlockFace face=hit==null?null:hit.getHitBlockFace();
         if(target==null||face==null||face==BlockFace.UP||face==BlockFace.DOWN){p.sendMessage("Look at a vertical wall's bottom-left block.");return;}
         int dx=face.getModZ(),dz=-face.getModX();
         List<Block> spots=new ArrayList<>();
