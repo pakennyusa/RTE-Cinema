@@ -1,5 +1,5 @@
 name: RTECinema
-version: '0.2.0-beta'
+version: '0.3.0-beta'
 main: studios.rte.cinema.RTECinema
 api-version: '26.3'
 author: RTE Studios
