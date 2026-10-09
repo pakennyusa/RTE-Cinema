@@ -27,10 +27,15 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
     private BukkitTask broadcaster;
     private Path mediaRoot;
     private File screenFile;
+    private AudioManager audio;
+    private final Set<UUID> audioReady=ConcurrentHashMap.newKeySet();
     @Override public void onEnable(){
         saveDefaultConfig();
         mediaRoot=getDataFolder().toPath().resolve("media");
-        try{Files.createDirectories(mediaRoot);}catch(IOException e){throw new IllegalStateException(e);}
+        try{
+            Files.createDirectories(mediaRoot);
+            audio=new AudioManager(this,mediaRoot);
+        }catch(IOException e){throw new IllegalStateException(e);}
         screenFile=new File(getDataFolder(),"screens.yml");
         executor=Executors.newCachedThreadPool(r->{Thread t=new Thread(r,"RTE-Cinema-FFmpeg");t.setDaemon(true);return t;});
         loadScreens();
@@ -47,7 +52,9 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
         saveScreens();
     }
     private void stop(Screen s){
+        silence(s);
         Decoder d=s.decoder;s.decoder=null;if(d!=null)d.close();
+        s.lastAudioSegment=-1;
         s.filename=null;s.paused=false;s.seconds=0;
     }
     private void saveScreens(){
@@ -75,20 +82,37 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
         map.setTrackingPosition(false);
         map.setUnlimitedTracking(false);
     }
+    private void silence(Screen s){
+        if(audio==null || s.filename==null)return;
+        for(Player p:Bukkit.getOnlinePlayers())audio.silence(p,s);
+    }
     private void broadcast(){
         int maxDistance=Math.max(8,Math.min(128,getConfig().getInt("view-distance",32)));
         double distSq=maxDistance*maxDistance;
         for(Screen s:screens.values()){
-            if(s.decoder==null||s.paused||s.generation==0||s.generation==s.lastSentGeneration)continue;
+            if(s.decoder==null||s.paused)continue;
+            if(s.decoder.finished){
+                if(s.loop && s.filename!=null){
+                    try{start(s,s.filename,0);}catch(IOException e){getLogger().warning("Loop failed: "+e.getMessage());stop(s);}
+                }else{
+                    silence(s);s.decoder=null;s.filename=null;s.lastAudioSegment=-1;
+                }
+                continue;
+            }
+            if(s.generation==0||s.generation==s.lastSentGeneration)continue;
             int fps=Math.max(1,Math.min(10,getConfig().getInt("fps",8)));
             long delta=s.generation-s.lastSentGeneration;
             s.lastSentGeneration=s.generation;
             s.seconds+=delta/(double)fps;
             ItemFrame first=s.itemFrame(0);
             if(first==null)continue;
+            int segment=(int)(s.seconds/audio.segmentSeconds());
+            boolean playAudio=audio.ready(s.filename) && segment!=s.lastAudioSegment;
+            if(playAudio)s.lastAudioSegment=segment;
             for(Player p:Bukkit.getOnlinePlayers()){
                 if(!p.hasPermission("rtecinema.watch")||p.getWorld()!=first.getWorld())continue;
                 if(p.getLocation().distanceSquared(first.getLocation())>distSq)continue;
+                if(playAudio && audioReady.contains(p.getUniqueId()))audio.play(p,s,segment,first.getLocation());
                 for(int i=0;i<s.maps.size();i++){
                     MapView map=s.map(i);
                     if(map!=null)p.sendMap(map);
@@ -106,6 +130,8 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
         s.sendMessage("/cinema create <name> <width> <height> - look at bottom-left wall block");
         s.sendMessage("/cinema list | select <name> | gui | status");
         s.sendMessage("/cinema play <filename> | pause | resume | stop | delete <name>");
+        s.sendMessage("/cinema audio prepare <filename> | audio pack | audio status");
+        s.sendMessage("/cinema loop on|off | loop toggle | loop status (per theater)");
         s.sendMessage("Media folder: plugins/RTECinema/media");
     }
     @Override public boolean onCommand(CommandSender sender,Command cmd,String label,String[] args){
@@ -131,6 +157,56 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
                     p.sendMessage(ChatColor.GREEN+"Selected "+args[1]);
                 }
                 case "list"->{if(allowed(p,"rtecinema.use"))p.sendMessage("Screens: "+String.join(", ",screens.keySet()));}
+                case "loop"->{
+                    if(!allowed(p,"rtecinema.control"))return true;
+                    Screen s=resolve(p);
+                    if(s==null){p.sendMessage("Select a theater first.");return true;}
+                    if(args.length==1||args[1].equalsIgnoreCase("status")){
+                        p.sendMessage(ChatColor.GOLD+"Loop for "+s.name+": "+(s.loop?"ON":"OFF"));return true;
+                    }
+                    if(args[1].equalsIgnoreCase("toggle"))s.loop=!s.loop;
+                    else if(args[1].equalsIgnoreCase("on"))s.loop=true;
+                    else if(args[1].equalsIgnoreCase("off"))s.loop=false;
+                    else{p.sendMessage("Usage: /cinema loop on|off|toggle|status");return true;}
+                    saveScreens();
+                    p.sendMessage(ChatColor.GREEN+"Loop for "+s.name+" is now "+(s.loop?"ON":"OFF"));
+                }
+                case "audio"->{
+                    if(args.length<2){p.sendMessage("/cinema audio prepare <filename> | pack | status");return true;}
+                    switch(args[1].toLowerCase(Locale.ROOT)){
+                        case "prepare"->{
+                            if(!allowed(p,"rtecinema.control"))return true;
+                            if(args.length<3){p.sendMessage("Usage: /cinema audio prepare <filename>");return true;}
+                            String filename=args[2];
+                            Path movie=safeFile(filename);
+                            String ffmpeg=getConfig().getString("ffmpeg-path","ffmpeg");
+                            p.sendMessage(ChatColor.YELLOW+"Preparing OGG audio asynchronously. This may take a while.");
+                            executor.submit(()->{
+                                try{
+                                    int parts=audio.prepare(movie,ffmpeg);
+                                    Bukkit.getScheduler().runTask(this,()->{
+                                        p.sendMessage(ChatColor.GREEN+"Audio ready: "+parts+" OGG segments. Re-upload RTE-Cinema-Audio.zip to your HTTPS host, then use /cinema audio pack.");
+                                    });
+                                }catch(Exception ex){
+                                    getLogger().warning("Audio preparation failed for "+filename+": "+ex.getMessage());
+                                    Bukkit.getScheduler().runTask(this,()->p.sendMessage(ChatColor.RED+"Audio preparation failed: "+ex.getMessage()));
+                                }
+                            });
+                        }
+                        case "pack"->{
+                            if(!allowed(p,"rtecinema.watch"))return true;
+                            audio.sendPack(p);
+                            p.sendMessage("Resource pack offered. Accept it for movie audio.");
+                        }
+                        case "status"->{
+                            if(!allowed(p,"rtecinema.use"))return true;
+                            Screen current=resolve(p);
+                            p.sendMessage("Audio pack loaded: "+audioReady.contains(p.getUniqueId())+
+                                "; selected film prepared: "+(current!=null&&current.filename!=null&&audio.ready(current.filename)));
+                        }
+                        default->p.sendMessage("/cinema audio prepare <filename> | pack | status");
+                    }
+                }
                 case "gui"->{if(allowed(p,"rtecinema.use"))openGui(p);}
                 case "status"->{
                     if(!allowed(p,"rtecinema.use"))return true;
@@ -147,7 +223,7 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
                     if(!allowed(p,"rtecinema.control"))return true;
                     Screen s=resolve(p);
                     if(s==null||s.decoder==null){p.sendMessage("Nothing playing.");return true;}
-                    s.paused=true;s.decoder.close();s.decoder=null;p.sendMessage("Paused.");
+                    s.paused=true;s.decoder.close();s.decoder=null;silence(s);p.sendMessage("Paused.");
                 }
                 case "resume"->{
                     if(!allowed(p,"rtecinema.control"))return true;
@@ -226,7 +302,8 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
     private void start(Screen s,String file,double offset)throws IOException{
         Path path=safeFile(file);
         if(s.decoder!=null)s.decoder.close();
-        s.filename=file;s.paused=false;s.seconds=offset;s.lastSentGeneration=s.generation;
+        silence(s);
+        s.filename=file;s.paused=false;s.seconds=offset;s.lastSentGeneration=s.generation;s.lastAudioSegment=-1;
         int fps=Math.max(1,Math.min(10,getConfig().getInt("fps",8)));
         Decoder decoder=new Decoder(s,path,getConfig().getString("ffmpeg-path","ffmpeg"),fps,offset,getLogger());
         s.decoder=decoder;executor.submit(decoder);
@@ -238,6 +315,8 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
         contents[12]=button(Material.YELLOW_DYE,"Pause");
         contents[14]=button(Material.RED_DYE,"Stop");
         contents[16]=button(Material.MAP,"Status");
+        Screen current=resolve(p);
+        contents[22]=button(Material.REPEATER,"Loop: "+(current!=null&&current.loop?"ON":"OFF"));
         inv.setContents(contents);p.openInventory(inv);
     }
     private ItemStack button(Material type,String name){
@@ -253,12 +332,26 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
         int slot=e.getRawSlot();
         if(slot==16){p.performCommand("cinema status");return;}
         if(!p.hasPermission("rtecinema.control")&&!p.hasPermission("rtecinema.admin"))return;
+        if(slot==22){p.performCommand("cinema loop toggle");p.closeInventory();return;}
         if(slot==10)p.performCommand("cinema resume");
         else if(slot==12)p.performCommand("cinema pause");
         else if(slot==14)p.performCommand("cinema stop");
     }
+    @EventHandler public void onPackStatus(org.bukkit.event.player.PlayerResourcePackStatusEvent event){
+        switch(event.getStatus()){
+            case SUCCESSFULLY_LOADED -> audioReady.add(event.getPlayer().getUniqueId());
+            case DECLINED, FAILED_DOWNLOAD, INVALID_URL, FAILED_RELOAD, DISCARDED -> audioReady.remove(event.getPlayer().getUniqueId());
+            default -> {}
+        }
+    }
+    @EventHandler public void onQuit(org.bukkit.event.player.PlayerQuitEvent event){
+        audioReady.remove(event.getPlayer().getUniqueId());
+        selected.remove(event.getPlayer().getUniqueId());
+    }
     @Override public List<String> onTabComplete(CommandSender sender,Command command,String alias,String[] args){
-        if(args.length==1)return List.of("help","create","list","select","gui","status","play","pause","resume","stop","delete").stream().filter(s->s.startsWith(args[0].toLowerCase(Locale.ROOT))).toList();
+        if(args.length==1)return List.of("help","create","list","select","gui","status","play","pause","resume","stop","delete","loop","audio").stream().filter(s->s.startsWith(args[0].toLowerCase(Locale.ROOT))).toList();
+        if(args.length==2&&args[0].equalsIgnoreCase("loop"))return List.of("on","off","toggle","status");
+        if(args.length==2&&args[0].equalsIgnoreCase("audio"))return List.of("prepare","pack","status");
         if(args.length==2&&(args[0].equalsIgnoreCase("select")||args[0].equalsIgnoreCase("delete")))return screens.keySet().stream().filter(s->s.startsWith(args[1].toLowerCase(Locale.ROOT))).toList();
         if(args.length==2&&args[0].equalsIgnoreCase("play")){
             try(var paths=Files.list(mediaRoot)){return paths.filter(Files::isRegularFile).map(p->p.getFileName().toString()).filter(s->s.startsWith(args[1])).limit(30).toList();}
