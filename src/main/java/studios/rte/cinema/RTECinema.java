@@ -273,7 +273,9 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
                     if(!allowed(p,"rtecinema.control"))return true;
                     Screen s=resolve(p);
                     if(s==null||!s.paused||s.filename==null){p.sendMessage("Nothing paused.");return true;}
-                    start(s,s.filename,s.seconds);p.sendMessage("Resumed.");
+                    boolean singleMode=getConfig().getString("audio.mode","single").equalsIgnoreCase("single");
+                    start(s,s.filename,singleMode?0:s.seconds);
+                    p.sendMessage(singleMode?"Restarted from beginning (single-track audio cannot seek).":"Resumed.");
                 }
                 case "stop"->{
                     if(!allowed(p,"rtecinema.control"))return true;
