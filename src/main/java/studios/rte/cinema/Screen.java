@@ -19,6 +19,8 @@ final class Screen {
     volatile Decoder decoder;
     boolean loop = false;
     int lastAudioSegment = -1;
+    long playStartNanos = 0L;
+    double startOffsetSeconds = 0.0;
     Screen(String name,String world,int width,int height,List<UUID> frames,List<Integer> maps){
         this.name=name;this.world=world;this.width=width;this.height=height;
         this.frames=new ArrayList<>(frames);this.maps=new ArrayList<>(maps);
