@@ -22,6 +22,7 @@ final class AudioManager {
     private final Path audio;
     private final Path pack;
     private final Map<String, Integer> segments=new ConcurrentHashMap<>();
+    private final Set<String> fullTracks=ConcurrentHashMap.newKeySet();
     private final Set<UUID> optedOut=ConcurrentHashMap.newKeySet();
     private static final int SECONDS=4;
 
@@ -31,10 +32,15 @@ final class AudioManager {
         Files.createDirectories(audio);
         this.pack=plugin.getDataFolder().toPath().resolve("RTE-Cinema-Audio.zip");
         loadIndex();
+        try(var dirs=Files.list(audio)){
+            for(Path folder:dirs.filter(Files::isDirectory).toList())
+                if(Files.isRegularFile(folder.resolve("full.ogg")))fullTracks.add(folder.getFileName().toString());
+        }
     }
     Path pack(){return pack;}
     int segmentSeconds(){return SECONDS;}
     boolean ready(String filename){return segments.containsKey(id(filename));}
+    boolean fullReady(String filename){return fullTracks.contains(id(filename));}
     int count(String filename){return segments.getOrDefault(id(filename),0);}
     boolean muted(Player player){return optedOut.contains(player.getUniqueId());}
     void toggleMute(Player player,boolean mute){
@@ -84,6 +90,31 @@ final class AudioManager {
         generatePack();
         return n;
     }
+    int prepareSingle(Path movie,String ffmpeg)throws IOException,InterruptedException {
+        String mediaId=id(movie.getFileName().toString());
+        Path folder=audio.resolve(mediaId);
+        Files.createDirectories(folder);
+        Path target=folder.resolve("full.ogg");
+        Path temp=folder.resolve("full.tmp.ogg");
+        List<String> cmd=List.of(ffmpeg,"-y","-hide_banner","-loglevel","error","-nostdin",
+            "-i",movie.toAbsolutePath().toString(),"-vn","-map","0:a:0",
+            "-ac","2","-ar","24000","-c:a","libvorbis","-q:a","2",
+            temp.toAbsolutePath().toString());
+        Process process=new ProcessBuilder(cmd).redirectErrorStream(true).start();
+        ByteArrayOutputStream log=new ByteArrayOutputStream();
+        try(InputStream in=process.getInputStream()){in.transferTo(log);}
+        int code=process.waitFor();
+        if(code!=0)throw new IOException("Single OGG conversion failed: "+log.toString(StandardCharsets.UTF_8));
+        Files.move(temp,target,StandardCopyOption.REPLACE_EXISTING);
+        fullTracks.add(mediaId);
+        generatePack();
+        return (int)Math.min(Integer.MAX_VALUE,Files.size(target));
+    }
+    void playSingle(Player player,Screen screen,Location at){
+        if(muted(player)||screen.filename==null||!fullReady(screen.filename))return;
+        float volume=(float)Math.max(0.01,Math.min(4,plugin.getConfig().getDouble("audio.volume",1.0)));
+        player.playSound(at,"rtecinema:"+id(screen.filename)+".full",SoundCategory.RECORDS,volume,1f);
+    }
     private synchronized void generatePack()throws IOException {
         Path temporary=pack.resolveSibling(pack.getFileName()+".tmp");
         int format=plugin.getConfig().getInt("audio.pack-format",97);
@@ -103,6 +134,14 @@ final class AudioManager {
                     sounds.append('"').append(id).append('.').append(name).append("\":{\"sounds\":[{\"name\":\"rtecinema:")
                           .append(id).append('/').append(name).append("\",\"stream\":true}]}");
                 }
+            }
+            for(String id:new TreeSet<>(fullTracks)){
+                Path file=audio.resolve(id).resolve("full.ogg");
+                if(!Files.isRegularFile(file))continue;
+                entry(zip,"assets/rtecinema/sounds/"+id+"/full.ogg",Files.readAllBytes(file));
+                if(!first)sounds.append(',');first=false;
+                sounds.append('"').append(id).append(".full\":{\"sounds\":[{\"name\":\"rtecinema:")
+                    .append(id).append("/full\",\"stream\":true}]}");
             }
             sounds.append('}');
             entry(zip,"assets/rtecinema/sounds.json",sounds.toString().getBytes(StandardCharsets.UTF_8));
@@ -136,6 +175,7 @@ final class AudioManager {
     void silence(Player player,Screen screen){
         if(screen.filename==null)return;
         String prefix="rtecinema:"+id(screen.filename)+".";
+        player.stopSound("rtecinema:"+id(screen.filename)+".full",SoundCategory.RECORDS);
         // Stop all segments of the active film to avoid overlap after pause/seek/stop.
         for(int i=0;i<count(screen.filename);i++)
             player.stopSound(prefix+String.format(Locale.ROOT,"s%05d",i),SoundCategory.RECORDS);
