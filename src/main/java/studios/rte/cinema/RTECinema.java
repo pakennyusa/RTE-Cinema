@@ -113,11 +113,17 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
             if(first==null)continue;
             int segment=(int)Math.floor(s.seconds/audio.segmentSeconds());
             boolean playAudio=audio.ready(s.filename) && segment!=s.lastAudioSegment;
-            if(playAudio)s.lastAudioSegment=segment;
+            if(playAudio){
+                s.lastAudioSegment=segment;
+                if(getConfig().getBoolean("audio.debug",false))getLogger().info("Audio scheduler ["+s.name+"]: segment="+segment+", seconds="+String.format(java.util.Locale.ROOT,"%.2f",s.seconds)+", available="+audio.count(s.filename));
+            }
             for(Player p:Bukkit.getOnlinePlayers()){
                 if(!p.hasPermission("rtecinema.watch")||p.getWorld()!=first.getWorld())continue;
                 if(p.getLocation().distanceSquared(first.getLocation())>distSq)continue;
-                if(playAudio && audioReady.contains(p.getUniqueId()))audio.play(p,s,segment,first.getLocation());
+                if(playAudio && audioReady.contains(p.getUniqueId())){
+                    audio.play(p,s,segment,first.getLocation());
+                    if(getConfig().getBoolean("audio.debug",false))getLogger().info("Audio dispatch ["+s.name+"]: segment "+segment+" -> "+p.getName());
+                }
                 if(newFrame)for(int i=0;i<s.maps.size();i++){
                     MapView map=s.map(i);
                     if(map!=null)p.sendMap(map);
@@ -136,7 +142,7 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
         s.sendMessage("/cinema create <name> <width> <height> - look at bottom-left wall block");
         s.sendMessage("/cinema list | select <name> | gui | status");
         s.sendMessage("/cinema play <filename> | pause | resume | stop | delete <name>");
-        s.sendMessage("/cinema audio prepare <filename> | audio pack | audio status | audio test");
+        s.sendMessage("/cinema audio prepare <filename> | audio pack | audio status | audio test [segment]");
         s.sendMessage("/cinema loop on|off | loop toggle | loop status (per theater)");
         s.sendMessage("Media folder: plugins/RTECinema/media");
     }
@@ -215,15 +221,24 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
                             if(!audioReady.contains(p.getUniqueId())){
                                 p.sendMessage(ChatColor.RED+"Cinema pack not confirmed loaded. Run /cinema audio pack.");return true;
                             }
-                            p.sendMessage(ChatColor.GOLD+"Testing segment 0; raise Jukebox/Note Blocks volume.");
-                            audio.play(p,current,0,p.getLocation());
-                            getLogger().info("Audio diagnostic: sent segment 0 to "+p.getName()+" for "+current.filename);
+                            int index=0;
+                            if(args.length>=3){
+                                try{index=Integer.parseInt(args[2]);}
+                                catch(NumberFormatException ex){p.sendMessage(ChatColor.RED+"Usage: /cinema audio test [segment number]");return true;}
+                            }
+                            int count=audio.count(current.filename);
+                            if(index<0||index>=count){p.sendMessage(ChatColor.RED+"Segment must be 0 through "+(count-1));return true;}
+                            p.sendMessage(ChatColor.GOLD+"Testing audio segment "+index+" of "+count+" (Jukebox/Note Blocks volume).");
+                            audio.play(p,current,index,p.getLocation());
+                            getLogger().info("Audio diagnostic: sent segment "+index+" of "+count+" to "+p.getName()+" for "+current.filename);
                         }
                         case "status"->{
                             if(!allowed(p,"rtecinema.use"))return true;
                             Screen current=resolve(p);
                             p.sendMessage("Audio pack loaded: "+audioReady.contains(p.getUniqueId())+
-                                "; selected film prepared: "+(current!=null&&current.filename!=null&&audio.ready(current.filename)));
+                                "; selected film prepared: "+(current!=null&&current.filename!=null&&audio.ready(current.filename))+
+                                "; segments: "+(current==null||current.filename==null?0:audio.count(current.filename))+
+                                "; timeline: "+(current==null?0:(int)current.seconds)+"s");
                         }
                         default->p.sendMessage("/cinema audio prepare <filename> | pack | status");
                     }
