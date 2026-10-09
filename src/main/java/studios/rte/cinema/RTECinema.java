@@ -55,6 +55,7 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
         silence(s);
         Decoder d=s.decoder;s.decoder=null;if(d!=null)d.close();
         s.lastAudioSegment=-1;
+        s.playStartNanos=0L;
         s.filename=null;s.paused=false;s.seconds=0;
     }
     private void saveScreens(){
@@ -99,25 +100,29 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
                 }
                 continue;
             }
-            if(s.generation==0||s.generation==s.lastSentGeneration)continue;
-            int fps=Math.max(1,Math.min(10,getConfig().getInt("fps",8)));
-            long delta=s.generation-s.lastSentGeneration;
-            s.lastSentGeneration=s.generation;
-            s.seconds+=delta/(double)fps;
+            boolean newFrame=s.generation!=s.lastSentGeneration;
+            // Start the clock when the first decoded frame is available, not when the command ran.
+            if(s.playStartNanos==0L && newFrame){
+                s.playStartNanos=System.nanoTime();
+                s.lastSentGeneration=s.generation;
+            }
+            if(s.playStartNanos==0L)continue;
+            s.seconds=s.startOffsetSeconds+(System.nanoTime()-s.playStartNanos)/1_000_000_000.0;
             ItemFrame first=s.itemFrame(0);
             if(first==null)continue;
-            int segment=(int)(s.seconds/audio.segmentSeconds());
+            int segment=(int)Math.floor(s.seconds/audio.segmentSeconds());
             boolean playAudio=audio.ready(s.filename) && segment!=s.lastAudioSegment;
             if(playAudio)s.lastAudioSegment=segment;
             for(Player p:Bukkit.getOnlinePlayers()){
                 if(!p.hasPermission("rtecinema.watch")||p.getWorld()!=first.getWorld())continue;
                 if(p.getLocation().distanceSquared(first.getLocation())>distSq)continue;
                 if(playAudio && audioReady.contains(p.getUniqueId()))audio.play(p,s,segment,first.getLocation());
-                for(int i=0;i<s.maps.size();i++){
+                if(newFrame)for(int i=0;i<s.maps.size();i++){
                     MapView map=s.map(i);
                     if(map!=null)p.sendMap(map);
                 }
             }
+            if(newFrame)s.lastSentGeneration=s.generation;
         }
     }
     private boolean allowed(CommandSender sender,String permission){
@@ -303,7 +308,8 @@ public final class RTECinema extends JavaPlugin implements CommandExecutor,TabCo
         Path path=safeFile(file);
         if(s.decoder!=null)s.decoder.close();
         silence(s);
-        s.filename=file;s.paused=false;s.seconds=offset;s.lastSentGeneration=s.generation;s.lastAudioSegment=-1;
+        s.filename=file;s.paused=false;s.seconds=offset;s.startOffsetSeconds=offset;
+        s.playStartNanos=0L;s.lastSentGeneration=s.generation;s.lastAudioSegment=-1;
         int fps=Math.max(1,Math.min(10,getConfig().getInt("fps",8)));
         Decoder decoder=new Decoder(s,path,getConfig().getString("ffmpeg-path","ffmpeg"),fps,offset,getLogger());
         s.decoder=decoder;executor.submit(decoder);
