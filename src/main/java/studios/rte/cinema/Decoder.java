@@ -13,6 +13,7 @@ final class Decoder implements Runnable {
     private final Logger logger;
     private final AtomicBoolean running=new AtomicBoolean(true);
     private volatile Process process;
+    volatile boolean finished;
     Decoder(Screen screen,Path file,String ffmpeg,int fps,double start,Logger logger){
         this.screen=screen;this.file=file;this.ffmpeg=ffmpeg;this.fps=fps;this.start=start;this.logger=logger;
     }
@@ -52,7 +53,10 @@ final class Decoder implements Runnable {
                     screen.images=tiles;
                     screen.generation++;
                 }
-            }finally{p.destroyForcibly();}
+            }finally{
+                if(running.get())finished=true;
+                p.destroyForcibly();
+            }
         }catch(IOException ex){
             if(running.get())logger.warning("Cinema decoder for "+screen.name+" stopped: "+ex.getMessage());
         }
